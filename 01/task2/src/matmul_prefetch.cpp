@@ -23,6 +23,17 @@ static constexpr int kLine = 16;            // floats per 64B cache line — pre
 #endif
 static constexpr int kPrefetchDist = PREFETCH_DIST;
 
+// PREFETCH_DIST=0 is the "no software prefetch" baseline the speedups in 2A are
+// measured against, so at 0 the prefetches have to compile away completely, not
+// just become _mm_prefetch(&a[p + 0]).
+#if PREFETCH_DIST > 0
+#define PF_A(ptr) _mm_prefetch(reinterpret_cast<const char*>(ptr), _MM_HINT_T0)
+#define PF_B(ptr) _mm_prefetch(reinterpret_cast<const char*>(ptr), _MM_HINT_T1)
+#else
+#define PF_A(ptr) ((void)0)
+#define PF_B(ptr) ((void)0)
+#endif
+
 void matmul_prefetch(const float* A, const float* B, float* C,
                      int M, int N, int K, int lda, int ldb, int ldc) {
     // K-blocking splits each dot product into partial sums, so C can no longer be written
@@ -47,11 +58,8 @@ void matmul_prefetch(const float* A, const float* B, float* C,
                         float acc = 0.0f;
                         int p = kk;
                         for (; p + kLine <= k_end; p += kLine) {
-                            // evicting A.
-                            _mm_prefetch(reinterpret_cast<const char*>(&a[p + kPrefetchDist]),
-                                         _MM_HINT_T0);
-                            _mm_prefetch(reinterpret_cast<const char*>(&b[p + kPrefetchDist]),
-                                         _MM_HINT_T1);
+                            PF_A(&a[p + kPrefetchDist]);
+                            PF_B(&b[p + kPrefetchDist]);
                             for (int q = 0; q < kLine; ++q) acc += a[p + q] * b[p + q];
                         }
                         for (; p < k_end; ++p) acc += a[p] * b[p];

@@ -31,14 +31,15 @@
 
 namespace {
 
+// picked from the BLOCK_M/N/K sweep in results/h_block_size.csv
 #ifndef BLOCK_M
-#define BLOCK_M 64
+#define BLOCK_M 32
 #endif
 #ifndef BLOCK_N
-#define BLOCK_N 48
+#define BLOCK_N 128
 #endif
 #ifndef BLOCK_K
-#define BLOCK_K 1024
+#define BLOCK_K 256
 #endif
 static constexpr int kBlockM = BLOCK_M;
 static constexpr int kBlockN = BLOCK_N;

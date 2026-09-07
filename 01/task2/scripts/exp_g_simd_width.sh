@@ -87,11 +87,17 @@ R_HI="${R_HI:-4}"
 instr_of() {  # instr_of <variant> <size> <reps>  ->  "instructions cycles correct"
     local v="$1" n="$2" r="$3" prog perfout instr cyc corr
     prog="$(mktemp)"
-    perfout="$(perf stat -e instructions,cycles -x, -- \
+    # On hybrid parts a bare event name is <not counted>, and perf echoes the event back
+    # as cpu_core/instructions/u, so an anchored ^instructions match never fires either.
+    local evi="instructions" evc="cycles"
+    if [ -d /sys/devices/cpu_core ]; then
+        evi="cpu_core/instructions/"; evc="cpu_core/cycles/"
+    fi
+    perfout="$(perf stat -e "$evi,$evc" -x, -- \
                "${PIN[@]}" "$BENCH" --only="$v" --size="$n" --reps="$r" 2>&1 1>"$prog")" || {
         rm -f "$prog"; echo "0 0 error"; return 0; }
-    instr="$(awk -F, '$3 ~ /^instructions/ { gsub(/[^0-9]/,"",$1); print $1; exit }' <<< "$perfout")"
-    cyc="$(awk -F, '$3 ~ /^cycles/ { gsub(/[^0-9]/,"",$1); print $1; exit }' <<< "$perfout")"
+    instr="$(awk -F, '$3 ~ /instructions/ && $3 !~ /atom/ { gsub(/[^0-9]/,"",$1); print $1; exit }' <<< "$perfout")"
+    cyc="$(awk -F, '$3 ~ /cycles/ && $3 !~ /atom/ { gsub(/[^0-9]/,"",$1); print $1; exit }' <<< "$perfout")"
     corr="$(sed -n 's/.*correct=\([a-zA-Z]*\).*/\1/p' "$prog")"
     grep -q 'skipped=unsupported' "$prog" && corr="unsupported"
     rm -f "$prog"

@@ -163,6 +163,12 @@ resolve_event() {
         [ -n "$cand" ] || continue
         if event_supported "$cand"; then found="$cand"; break; fi
     done <<< "$(_candidates "$logical")"
+    # On hybrid Intel parts (P + E cores) a bare event name opens on both PMUs and comes
+    # back as <not counted>, which every caller then parses as a zero. Address the P-core
+    # PMU explicitly so the counters actually land.
+    if [ -d /sys/devices/cpu_core ] && [ -n "$found" ] && [[ "$found" != */* ]]; then
+        found="cpu_core/$found/"
+    fi
     _EVENT_CACHE[$logical]="$found"
     printf '%s' "$found"
 }
@@ -252,7 +258,17 @@ _perf_raw() {
             if (v ~ /not (counted|supported)/ || v == "") v = 0
             gsub(/[^0-9.]/, "", v)
             if (v == "") v = 0
-            print ev "\t" v
+            # perf echoes the event with its modifier attached (cpu_core/instructions/u),
+            # but callers look it up either as the full pmu form or as the bare name. Emit
+            # both, otherwise every lookup misses and silently reads as zero.
+            full = ev
+            sub(/\/[ukhIGD]+$/, "/", full)
+            bare = full
+            sub(/^[a-z_]+\//, "", bare)
+            sub(/\/$/, "", bare)
+            sub(/:[ukhIGD]+$/, "", bare)
+            print full "\t" v
+            if (bare != full) print bare "\t" v
         }'
 }
 

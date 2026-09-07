@@ -8,3 +8,7 @@ bin/
 # the graded Makefiles are part of the submission
 !01/task1/Makefile
 !01/task1/bench/Makefile
+
+# build artifacts
+*.o
+compile_commands.json
