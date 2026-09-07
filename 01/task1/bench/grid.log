@@ -1,0 +1,21 @@
+N=  128 K=3 naive=0.061 reorder=0.049 unroll=0.042 tile=0.045 simd_nt=0.013 simd=0.011 simd128=0.015 optimized=0.003
+N=  128 K=5 naive=0.173 reorder=0.133 unroll=0.115 tile=0.122 simd_nt=0.030 simd=0.030 simd128=0.040 optimized=0.010
+N=  128 K=7 naive=0.271 reorder=0.262 unroll=0.226 tile=0.238 simd_nt=0.058 simd=0.059 simd128=0.078 optimized=0.021
+N=  128 K=9 naive=0.528 reorder=0.433 unroll=0.374 tile=0.392 simd_nt=0.090 simd=0.093 simd128=0.122 optimized=0.035
+N=  256 K=3 naive=0.243 reorder=0.198 unroll=0.169 tile=0.174 simd_nt=0.045 simd=0.046 simd128=0.061 optimized=0.014
+N=  256 K=5 naive=0.691 reorder=0.525 unroll=0.485 tile=0.540 simd_nt=0.129 simd=0.129 simd128=0.163 optimized=0.038
+N=  256 K=7 naive=1.112 reorder=1.095 unroll=1.035 tile=1.024 simd_nt=0.253 simd=0.250 simd128=0.346 optimized=0.084
+N=  256 K=9 naive=2.271 reorder=1.704 unroll=1.663 tile=1.771 simd_nt=0.410 simd=0.408 simd128=0.555 optimized=0.157
+N=  512 K=3 naive=0.972 reorder=0.771 unroll=0.752 tile=0.796 simd_nt=0.436 simd=0.209 simd128=0.261 optimized=0.050
+N=  512 K=5 naive=2.816 reorder=2.271 unroll=2.188 tile=2.099 simd_nt=1.442 simd=0.513 simd128=0.703 optimized=0.155
+N=  512 K=7 naive=4.508 reorder=4.548 unroll=4.195 tile=4.115 simd_nt=2.662 simd=1.121 simd128=1.420 optimized=0.344
+N=  512 K=9 naive=9.106 reorder=8.200 unroll=7.158 tile=6.908 simd_nt=4.713 simd=1.875 simd128=2.501 optimized=0.644
+N= 1024 K=3 naive=3.884 reorder=3.928 unroll=3.778 tile=3.293 simd_nt=2.427 simd=0.886 simd128=1.223 optimized=0.200
+N= 1024 K=5 naive=12.248 reorder=11.263 unroll=10.797 tile=9.424 simd_nt=6.527 simd=2.185 simd128=3.146 optimized=0.616
+N= 1024 K=7 naive=19.781 reorder=21.734 unroll=21.257 tile=17.927 simd_nt=13.130 simd=4.606 simd128=5.988 optimized=1.273
+N= 1024 K=9 naive=38.904 reorder=36.386 unroll=37.177 tile=29.568 simd_nt=22.083 simd=8.046 simd128=10.288 optimized=2.389
+N= 2048 K=3 naive=17.365 reorder=28.380 unroll=26.694 tile=14.852 simd_nt=14.842 simd=4.544 simd128=5.676 optimized=1.019
+N= 2048 K=5 naive=51.548 reorder=78.956 unroll=72.926 tile=38.828 simd_nt=39.660 simd=10.872 simd128=13.993 optimized=2.473
+N= 2048 K=7 naive=80.809 reorder=148.884 unroll=153.490 tile=74.602 simd_nt=79.053 simd=20.577 simd128=26.746 optimized=5.586
+N= 2048 K=9 naive=151.428 reorder=249.801 unroll=255.298 tile=123.809 simd_nt=133.493 simd=34.266 simd128=44.288 optimized=11.141
+DONE5

@@ -1,0 +1,7 @@
+# build artifacts
+bin/
+*.o
+compile_commands.json
+
+# report-only benchmark binary
+01/task1/bench/bench

@@ -1,0 +1,65 @@
+[l2] naive      N=  256 L2miss=      29,842 L3miss=       2,164
+[l2] naive      N=  512 L2miss=     169,628 L3miss=      11,147
+[l2] naive      N= 1024 L2miss=     757,341 L3miss=       4,490
+[l2] naive      N= 2048 L2miss=   2,666,346 L3miss=     110,849
+[l2] reorder    N=  256 L2miss=      26,931 L3miss=       2,002
+[l2] reorder    N=  512 L2miss=   1,252,436 L3miss=      62,053
+[l2] reorder    N= 1024 L2miss=   5,485,290 L3miss=     130,315
+[l2] reorder    N= 2048 L2miss=  19,765,790 L3miss=   9,828,210
+[l2] unroll     N=  256 L2miss=      28,905 L3miss=         831
+[l2] unroll     N=  512 L2miss=   1,183,232 L3miss=      17,757
+[l2] unroll     N= 1024 L2miss=   5,416,011 L3miss=     266,312
+[l2] unroll     N= 2048 L2miss=  19,764,308 L3miss=   9,890,606
+[l2] tile       N=  256 L2miss=      27,225 L3miss=       1,389
+[l2] tile       N=  512 L2miss=     169,752 L3miss=      11,043
+[l2] tile       N= 1024 L2miss=     790,762 L3miss=      22,291
+[l2] tile       N= 2048 L2miss=   2,945,401 L3miss=     544,507
+[l2] simd       N=  256 L2miss=      29,566 L3miss=       1,359
+[l2] simd       N=  512 L2miss=     179,789 L3miss=      13,586
+[l2] simd       N= 1024 L2miss=     783,208 L3miss=      33,194
+[l2] simd       N= 2048 L2miss=   2,886,821 L3miss=     812,336
+[l2] simd128    N=  256 L2miss=      29,951 L3miss=       1,858
+[l2] simd128    N=  512 L2miss=     172,987 L3miss=      11,812
+[l2] simd128    N= 1024 L2miss=     790,546 L3miss=      27,312
+[l2] simd128    N= 2048 L2miss=   2,927,149 L3miss=     727,590
+[l2] simd_nt    N=  256 L2miss=      29,424 L3miss=       2,414
+[l2] simd_nt    N=  512 L2miss=   1,572,965 L3miss=      35,503
+[l2] simd_nt    N= 1024 L2miss=   6,498,279 L3miss=     308,866
+[l2] simd_nt    N= 2048 L2miss=  20,686,871 L3miss=  11,403,928
+[l2] optimized  N=  256 L2miss=      29,653 L3miss=       1,439
+[l2] optimized  N=  512 L2miss=      83,817 L3miss=       9,286
+[l2] optimized  N= 1024 L2miss=     524,777 L3miss=       4,521
+[l2] optimized  N= 2048 L2miss=   1,889,458 L3miss=      95,314
+[l2] tile 16x64     N=  256 L2miss=      28,262
+[l2] tile 16x64     N=  512 L2miss=     169,570
+[l2] tile 16x64     N= 1024 L2miss=     769,465
+[l2] tile 16x64     N= 2048 L2miss=   2,675,970
+[l2] tile 32x128    N=  256 L2miss=      28,074
+[l2] tile 32x128    N=  512 L2miss=     173,134
+[l2] tile 32x128    N= 1024 L2miss=     767,260
+[l2] tile 32x128    N= 2048 L2miss=   2,745,771
+[l2] tile 64x64     N=  256 L2miss=      27,786
+[l2] tile 64x64     N=  512 L2miss=     170,809
+[l2] tile 64x64     N= 1024 L2miss=     778,940
+[l2] tile 64x64     N= 2048 L2miss=   2,869,423
+[l2] tile 64x128    N=  256 L2miss=      27,495
+[l2] tile 64x128    N=  512 L2miss=     171,834
+[l2] tile 64x128    N= 1024 L2miss=     804,986
+[l2] tile 64x128    N= 2048 L2miss=   2,960,621
+[l2] tile 64x256    N=  256 L2miss=      28,423
+[l2] tile 64x256    N=  512 L2miss=     173,034
+[l2] tile 64x256    N= 1024 L2miss=     785,843
+[l2] tile 64x256    N= 2048 L2miss=   2,931,611
+[l2] tile 128x256   N=  256 L2miss=      27,994
+[l2] tile 128x256   N=  512 L2miss=     173,974
+[l2] tile 128x256   N= 1024 L2miss=     997,324
+[l2] tile 128x256   N= 2048 L2miss=   5,709,768
+[l2] tile 128x512   N=  256 L2miss=      29,654
+[l2] tile 128x512   N=  512 L2miss=     168,231
+[l2] tile 128x512   N= 1024 L2miss=   1,168,680
+[l2] tile 128x512   N= 2048 L2miss=   7,464,931
+[l2] tile 256x512   N=  256 L2miss=      28,791
+[l2] tile 256x512   N=  512 L2miss=     354,252
+[l2] tile 256x512   N= 1024 L2miss=   4,282,511
+[l2] tile 256x512   N= 2048 L2miss=  16,620,199
+DONE4

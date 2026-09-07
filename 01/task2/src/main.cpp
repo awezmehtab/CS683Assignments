@@ -47,7 +47,7 @@ struct Tier {
 // `make solution && ./bin/matmul_solution` on your lab machines and adjust so a correct
 // reference lands at 70.
 static constexpr Tier kTiers[] = {
-    {5.0, 20.0},
+    {5.0 , 20.0},
     {10.0, 40.0},
     {18.0, 55.0},
     {25.0, 70.0},
