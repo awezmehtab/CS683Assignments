@@ -1,0 +1,1 @@
+stage,size,dist_floats,dist_bytes,time_ms,speedup_vs_noprefetch,instructions,cycles,ipc,l1d_miss,l1d_mpki,sw_prefetch,sw_prefetch_inef,inef_frac,correct
