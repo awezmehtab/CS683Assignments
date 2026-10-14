@@ -1,0 +1,176 @@
+#include "cache.h"
+
+// There are (1 << LEADER_BITS) srrip, dynamic i-rrip sets. Each's cache misses
+// updates psel. For the other sets, psel selects which one to use, if we're
+// using DUEL. it also needs to have instruction traffic > DYN_THRESHOLD_PCT in
+// SRRIP leader sets for all others to get dynamic IRRIP.
+//
+// instruction traffic = (#instr accesses + misses) / (#total accesses + misses)
+// this is sampled, and it's decayed periodically (with period DECAY_PERIOD)
+
+#define maxRRPV 3
+
+#ifndef DYN_THRESHOLD_PCT
+#define DYN_THRESHOLD_PCT 25
+#endif
+// counters are halved every DECAY_PERIOD leader accesses
+#ifndef DECAY_PERIOD
+#define DECAY_PERIOD (1 << 14)
+#endif
+#ifndef INSTR_INSERT_RRPV
+#define INSTR_INSERT_RRPV 0
+#endif
+#ifndef DATA_INSERT_RRPV
+#define DATA_INSERT_RRPV maxRRPV
+#endif
+#ifndef DUEL
+#define DUEL 1
+#endif
+#define PSEL_BITS 10
+#define PSEL_MAX ((1 << PSEL_BITS) - 1)
+#define PSEL_MID (1 << (PSEL_BITS - 1))
+
+// one leader of each kind per group of 32 sets
+#define LEADER_BITS 5
+#define NUM_LEADERS (1 << LEADER_BITS)
+static_assert(L2C_SET == NUM_LEADERS * NUM_LEADERS,
+              "leader selection assumes 1024 L2C sets");
+
+uint32_t l2_rrpv[L2C_SET][L2C_WAY];
+
+uint32_t instr_access, instr_miss, total_access, total_miss;
+// high = SRRIP leaders miss more
+uint32_t psel = PSEL_MID;
+
+uint64_t irrip_mode_fills, rrip_mode_fills;
+
+// SRRIP leader: high 5 index bits == low 5 bits
+static bool is_leader(uint32_t set) {
+    uint32_t mask = NUM_LEADERS - 1;
+    return ((set >> LEADER_BITS) & mask) == (set & mask);
+}
+
+// I-RRIP leader: high 5 bits == ~low 5 bits
+static bool is_irrip_leader(uint32_t set) {
+    uint32_t mask = NUM_LEADERS - 1;
+    return DUEL && ((set >> LEADER_BITS) & mask) == (~set & mask);
+}
+
+static bool use_irrip() {
+    uint64_t num = (uint64_t)instr_access + instr_miss;
+    uint64_t den = (uint64_t)total_access + total_miss;
+    bool code_heavy = 100 * num > DYN_THRESHOLD_PCT * den;
+    return code_heavy && (!DUEL || psel >= PSEL_MID);
+}
+
+static bool set_uses_irrip(uint32_t set) {
+    if (is_leader(set)) return false;
+    if (is_irrip_leader(set)) return true;
+    return use_irrip();
+}
+
+// same rule fill_cache() uses to set BLOCK::instruction
+static bool is_instr(uint32_t type, uint8_t isInstruction) {
+    return isInstruction && (type == LOAD || type == PREFETCH);
+}
+
+// called on misses only
+static void duel(uint32_t set, uint32_t type, uint8_t isInstruction) {
+    if (type == WRITEBACK) return;
+    if (is_leader(set) && psel < PSEL_MAX) psel++;
+    else if (is_irrip_leader(set) && psel > 0) psel--;
+}
+
+static void sample(uint32_t type, uint8_t isInstruction, uint8_t hit) {
+    if (type == WRITEBACK) return;
+
+    bool instr = is_instr(type, isInstruction);
+    total_access++;
+    instr_access += instr;
+    if (!hit) {
+        total_miss++;
+        instr_miss += instr;
+    }
+
+    if (total_access >= DECAY_PERIOD) {
+        instr_access >>= 1;
+        instr_miss >>= 1;
+        total_access >>= 1;
+        total_miss >>= 1;
+    }
+}
+
+// initialize replacement state
+void CACHE::l2c_initialize_replacement() {
+    cout << "Initialize Dynamic I-RRIP state for L2C (threshold "
+         << DYN_THRESHOLD_PCT << "%, duel " << DUEL << ")" << endl;
+
+    for (int i = 0; i < L2C_SET; i++)
+        for (int j = 0; j < L2C_WAY; j++) l2_rrpv[i][j] = maxRRPV;
+}
+
+// find replacement victim
+uint32_t CACHE::l2c_find_victim(uint32_t cpu, uint64_t instr_id, uint32_t set,
+                                const BLOCK* current_set, uint64_t ip,
+                                uint64_t full_addr, uint32_t type) {
+    for (int i = 0; i < L2C_WAY; i++)
+        if (!current_set[i].valid) return i;
+
+    // data-first eviction only in sets running I-RRIP
+    bool data_first = set_uses_irrip(set);
+
+    while (1) {
+        int instr_victim = -1;
+        for (int i = 0; i < L2C_WAY; i++) {
+            if (l2_rrpv[set][i] != maxRRPV) continue;
+            if (!data_first || !current_set[i].instruction) return i;
+            if (instr_victim < 0) instr_victim = i;
+        }
+
+        if (instr_victim >= 0) return instr_victim;
+
+        for (int i = 0; i < L2C_WAY; i++) l2_rrpv[set][i]++;
+    }
+
+    // WE SHOULD NOT REACH HERE
+    assert(0);
+    return 0;
+}
+
+// called on every cache hit and cache fill
+void CACHE::l2c_update_replacement_state(uint32_t cpu, uint32_t set,
+                                         uint32_t way, uint64_t full_addr,
+                                         uint64_t ip, uint64_t victim_addr,
+                                         uint32_t type, uint8_t hit,
+                                         uint8_t isInstruction) {
+    if ((type == WRITEBACK) && ip) assert(0);
+
+    bool leader = is_leader(set);
+    if (leader) sample(type, isInstruction, hit);
+    if (DUEL && !hit) duel(set, type, isInstruction);
+
+    if (hit) {
+        l2_rrpv[set][way] = 0;
+        return;
+    }
+
+    bool follower = !leader && !is_irrip_leader(set);
+    if (!set_uses_irrip(set)) {
+        if (follower) rrip_mode_fills++;
+        l2_rrpv[set][way] = maxRRPV - 1;
+        return;
+    }
+
+    if (follower) irrip_mode_fills++;
+    l2_rrpv[set][way] =
+        is_instr(type, isInstruction) ? INSTR_INSERT_RRPV : DATA_INSERT_RRPV;
+}
+
+// use this function to print out your own stats at the end of simulation
+void CACHE::l2c_replacement_final_stats() {
+    uint64_t fills = irrip_mode_fills + rrip_mode_fills;
+    cout << "L2C DYN_IRRIP follower fills (incl. warmup): " << fills
+         << " in I-RRIP mode: " << irrip_mode_fills << " ("
+         << (fills ? 100.0 * irrip_mode_fills / fills : 0) << "%)"
+         << " final psel: " << psel << endl;
+}
