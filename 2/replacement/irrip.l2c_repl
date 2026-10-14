@@ -1,0 +1,77 @@
+#include "cache.h"
+
+// instruction cache lines are inserted at a lower RRPV than data.
+// any hit, they go to 0
+// even while eviction among maxRRPV lines, data lines are preferred
+//
+// can be tweaked by the below macros
+
+#define maxRRPV 3
+
+#ifndef INSTR_INSERT_RRPV
+#define INSTR_INSERT_RRPV 0
+#endif
+#ifndef DATA_INSERT_RRPV
+#define DATA_INSERT_RRPV (maxRRPV - 1)
+#endif
+#ifndef EVICT_DATA_FIRST
+#define EVICT_DATA_FIRST 1
+#endif
+
+uint32_t l2_rrpv[L2C_SET][L2C_WAY];
+
+// initialize replacement state
+void CACHE::l2c_initialize_replacement() {
+    cout << "Initialize I-RRIP state for L2C" << endl;
+
+    for (int i = 0; i < L2C_SET; i++)
+        for (int j = 0; j < L2C_WAY; j++) l2_rrpv[i][j] = maxRRPV;
+}
+
+// find replacement victim
+uint32_t CACHE::l2c_find_victim(uint32_t cpu, uint64_t instr_id, uint32_t set,
+                                const BLOCK* current_set, uint64_t ip,
+                                uint64_t full_addr, uint32_t type) {
+    for (int i = 0; i < L2C_WAY; i++)
+        if (!current_set[i].valid) return i;
+
+    while (1) {
+        // data line at maxRRPV first, else the first code line there
+        int instr_victim = -1;
+        for (int i = 0; i < L2C_WAY; i++) {
+            if (l2_rrpv[set][i] != maxRRPV) continue;
+            if (!EVICT_DATA_FIRST || !current_set[i].instruction) return i;
+            if (instr_victim < 0) instr_victim = i;
+        }
+
+        if (instr_victim >= 0) return instr_victim;
+
+        for (int i = 0; i < L2C_WAY; i++) l2_rrpv[set][i]++;
+    }
+
+    // WE SHOULD NOT REACH HERE
+    assert(0);
+    return 0;
+}
+
+// called on every cache hit and cache fill
+void CACHE::l2c_update_replacement_state(uint32_t cpu, uint32_t set,
+                                         uint32_t way, uint64_t full_addr,
+                                         uint64_t ip, uint64_t victim_addr,
+                                         uint32_t type, uint8_t hit,
+                                         uint8_t isInstruction) {
+    if ((type == WRITEBACK) && ip) assert(0);
+
+    if (hit) {
+        l2_rrpv[set][way] = 0;
+        return;
+    }
+
+    // same rule fill_cache() uses to set BLOCK::instruction
+    bool instr = isInstruction && (type == LOAD || type == PREFETCH);
+    l2_rrpv[set][way] = instr ? INSTR_INSERT_RRPV : DATA_INSERT_RRPV;
+}
+
+// use this function to print out your own stats at the end of simulation
+void CACHE::l2c_replacement_final_stats() {
+}
