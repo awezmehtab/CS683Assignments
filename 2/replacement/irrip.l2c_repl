@@ -28,7 +28,10 @@ void CACHE::l2c_initialize_replacement() {
         for (int j = 0; j < L2C_WAY; j++) l2_rrpv[i][j] = maxRRPV;
 }
 
-// find replacement victim
+// find replacement victim. empty way first. else, among lines at maxRRPV,
+// a data line first, if there's none take the first code line there (no
+// extra aging, so data can't starve). nobody at maxRRPV -> age the set and
+// try again, like SRRIP
 uint32_t CACHE::l2c_find_victim(uint32_t cpu, uint64_t instr_id, uint32_t set,
                                 const BLOCK* current_set, uint64_t ip,
                                 uint64_t full_addr, uint32_t type) {
@@ -36,7 +39,6 @@ uint32_t CACHE::l2c_find_victim(uint32_t cpu, uint64_t instr_id, uint32_t set,
         if (!current_set[i].valid) return i;
 
     while (1) {
-        // data line at maxRRPV first, else the first code line there
         int instr_victim = -1;
         for (int i = 0; i < L2C_WAY; i++) {
             if (l2_rrpv[set][i] != maxRRPV) continue;
@@ -54,7 +56,9 @@ uint32_t CACHE::l2c_find_victim(uint32_t cpu, uint64_t instr_id, uint32_t set,
     return 0;
 }
 
-// called on every cache hit and cache fill
+// called on every cache hit and cache fill.
+// hit: back to 0 for both code and data, a hit means it got reused.
+// fill: code at INSTR_INSERT_RRPV, data at DATA_INSERT_RRPV
 void CACHE::l2c_update_replacement_state(uint32_t cpu, uint32_t set,
                                          uint32_t way, uint64_t full_addr,
                                          uint64_t ip, uint64_t victim_addr,

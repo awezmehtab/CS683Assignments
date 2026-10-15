@@ -47,10 +47,12 @@ static_assert(L2C_SET == NUM_LEADERS * NUM_LEADERS,
 
 uint32_t l2_rrpv[L2C_SET][L2C_WAY];
 
+// sampled on SRRIP leaders, for the instruction traffic ratio
 uint32_t instr_access, instr_miss, total_access, total_miss;
 // high = SRRIP leaders miss more
 uint32_t psel = PSEL_MID;
 
+// only for the end-of-run stats line
 uint64_t irrip_mode_fills, rrip_mode_fills, pf_fills;
 
 // SRRIP leader: high 5 index bits == low 5 bits
@@ -65,6 +67,8 @@ static bool is_irrip_leader(uint32_t set) {
     return DUEL && ((set >> LEADER_BITS) & mask) == (~set & mask);
 }
 
+// what followers do: I-RRIP if instruction traffic > DYN_THRESHOLD_PCT
+// (integer math), and with DUEL also only if I-RRIP leaders miss less
 static bool use_irrip() {
     uint64_t num = (uint64_t)instr_access + instr_miss;
     uint64_t den = (uint64_t)total_access + total_miss;
@@ -72,6 +76,7 @@ static bool use_irrip() {
     return code_heavy && (!DUEL || psel >= PSEL_MID);
 }
 
+// leaders always run their own policy, followers ask use_irrip()
 static bool set_uses_irrip(uint32_t set) {
     if (is_leader(set)) return false;
     if (is_irrip_leader(set)) return true;
@@ -83,11 +88,14 @@ static bool is_instr(uint32_t type, uint8_t isInstruction) {
     return isInstruction && (type == LOAD || type == PREFETCH);
 }
 
+// a prefetch that isn't for code, i.e. it came from the L1D prefetcher
 static bool is_data_pf(uint32_t type, uint8_t isInstruction) {
     return type == PREFETCH && !isInstruction;
 }
 
-// called on misses only
+// called on misses only. a miss in an SRRIP leader -> psel up, in an I-RRIP
+// leader -> psel down. writebacks (and data prefetches with PF_AWARE) don't
+// count, they never stall the core
 static void duel(uint32_t set, uint32_t type, uint8_t isInstruction) {
     if (type == WRITEBACK || (PF_AWARE && is_data_pf(type, isInstruction)))
         return;
@@ -95,6 +103,10 @@ static void duel(uint32_t set, uint32_t type, uint8_t isInstruction) {
     else if (is_irrip_leader(set) && psel > 0) psel--;
 }
 
+// counts one access to an SRRIP leader for the ratio. writebacks are
+// skipped since they never stall the core, data prefetches too (PF_AWARE)
+// so a prefetch-heavy phase doesn't push followers out of I-RRIP. all four
+// counters halve once total_access reaches DECAY_PERIOD, so old phases fade
 static void sample(uint32_t type, uint8_t isInstruction, uint8_t hit) {
     if (type == WRITEBACK) return;
     if (PF_AWARE && is_data_pf(type, isInstruction)) return;
@@ -132,7 +144,8 @@ uint32_t CACHE::l2c_find_victim(uint32_t cpu, uint64_t instr_id, uint32_t set,
     for (int i = 0; i < L2C_WAY; i++)
         if (!current_set[i].valid) return i;
 
-    // data-first eviction only in sets running I-RRIP
+    // same as irrip.l2c_repl, but data-first eviction only in sets that are
+    // running I-RRIP right now, others evict like plain SRRIP
     bool data_first = set_uses_irrip(set);
 
     while (1) {
@@ -165,6 +178,10 @@ void CACHE::l2c_update_replacement_state(uint32_t cpu, uint32_t set,
     if (leader) sample(type, isInstruction, hit);
     if (DUEL && !hit) duel(set, type, isInstruction);
 
+    // PF_AWARE: a prefetch hitting a line doesn't promote it, only demand
+    // hits do (being prefetched again says nothing about reuse). prefetch
+    // fills go in at PF_INSERT_RRPV in every set, so bad prefetches evict
+    // each other first instead of code or demand data
     bool data_pf = PF_AWARE && is_data_pf(type, isInstruction);
 
     if (hit) {
@@ -178,6 +195,8 @@ void CACHE::l2c_update_replacement_state(uint32_t cpu, uint32_t set,
         return;
     }
 
+    // SRRIP sets insert everything at maxRRPV - 1, I-RRIP sets put code at
+    // INSTR_INSERT_RRPV and data at DATA_INSERT_RRPV
     bool follower = !leader && !is_irrip_leader(set);
     if (!set_uses_irrip(set)) {
         if (follower) rrip_mode_fills++;
