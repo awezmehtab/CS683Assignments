@@ -1,16 +1,285 @@
 #include "cache.h"
 
+// we maintain two tables:
+// IP table: per-IP last line, last stride, stride confidence and a
+// signature (a hash of that IP's recent strides).
+// Pattern table: shared, indexed by signature ^ IP bits, gives the stride
+// that followed that history (so it's not fully exclusive per IP).
+//
+// uniform strides are prefetched first; we fall back to the pattern table
+// when it confidently predicts a different stride, or there is no uniform
+// stride. degree is set from the measured accuracy every THROTTLE_WINDOW
+// prefetches that miss the L1D. prefetches never cross the 4 KB page.
 
-void CACHE::l1d_prefetcher_initialize() 
+
+#ifndef IPT_SIZE
+#define IPT_SIZE 64
+#endif
+#define IPT_TAG_BITS 16
+#define LINE_BITS 16
+#define STRIDE_BITS 7
+#define MAX_STRIDE ((1 << (STRIDE_BITS - 1)) - 1)
+#define CONF_MAX 3
+// strides seen in a row (minus one) before trusting a uniform stride
+#ifndef UNI_CONF
+#define UNI_CONF 1
+#endif
+#ifndef SIG_BITS
+#define SIG_BITS 12
+#endif
+#define SIG_SHIFT 3
+#define SIG_MASK ((1 << SIG_BITS) - 1)
+#ifndef PT_BITS
+#define PT_BITS 10
+#endif
+#define PT_SIZE (1 << PT_BITS)
+#ifndef NU_CONF
+#define NU_CONF 2
+#endif
+// recently issued prefetches, to avoid issuing the same line again
+#ifndef FILTER_SIZE
+#define FILTER_SIZE 32
+#endif
+#define FILTER_TAG_BITS 16
+
+// accuracy throttling: degree per accuracy range (percent)
+#ifndef THROTTLE_WINDOW
+#define THROTTLE_WINDOW 256
+#endif
+#ifndef ACC_LO
+#define ACC_LO 25
+#endif
+#ifndef ACC_MID
+#define ACC_MID 50
+#endif
+#ifndef ACC_HI
+#define ACC_HI 75
+#endif
+#ifndef DEG_LO
+#define DEG_LO 1
+#endif
+#ifndef DEG_MID
+#define DEG_MID 2
+#endif
+#ifndef DEG_HI
+#define DEG_HI 4
+#endif
+#ifndef DEG_MAX
+#define DEG_MAX 6
+#endif
+#ifndef DEG_INIT
+#define DEG_INIT 2
+#endif
+
+#define LINES_PER_PAGE_BITS (LOG2_PAGE_SIZE - LOG2_BLOCK_SIZE)
+
+struct ipt_entry {
+    bool valid;
+    uint32_t tag;        // IPT_TAG_BITS
+    uint32_t last_line;  // LINE_BITS low bits of the line address
+    int32_t last_stride; // STRIDE_BITS, signed
+    uint32_t conf;       // 2 bits
+    uint32_t sig;        // SIG_BITS
+    uint32_t lru;        // log2(IPT_SIZE) bits
+};
+
+struct pt_entry {
+    int32_t stride;      // STRIDE_BITS, signed
+    uint32_t conf;       // 2 bits
+};
+
+static ipt_entry ipt[IPT_SIZE];
+static pt_entry pt[PT_SIZE];
+static uint32_t filter[FILTER_SIZE];
+static bool filter_valid[FILTER_SIZE];
+static uint32_t filter_head;
+
+static uint32_t degree = DEG_INIT;
+static uint64_t snap_lower, snap_useful;
+
+// stats
+static uint64_t uni_pf, nu_pf, filtered;
+static uint64_t windows_at[DEG_MAX + 1];
+
+static uint32_t ip_hash(uint64_t ip)
 {
-    std::cout << "------------------------------------------------" << std::endl;
-    std::cout << "        Stride Pattern Prefetcher (SPP)         " << std::endl;
-    std::cout << "------------------------------------------------" << std::endl;
+    return (uint32_t)(ip ^ (ip >> 16) ^ (ip >> 32) ^ (ip >> 48));
+}
+
+static uint32_t next_sig(uint32_t sig, int32_t stride)
+{
+    uint32_t s = (uint32_t)stride & ((1 << STRIDE_BITS) - 1);
+    return ((sig << SIG_SHIFT) ^ s) & SIG_MASK;
+}
+
+static uint32_t pt_index(uint32_t sig, uint32_t iph)
+{
+    return (sig ^ (sig >> PT_BITS) ^ iph) & (PT_SIZE - 1);
+}
+
+static bool same_page(uint64_t a, uint64_t b)
+{
+    return (a >> LINES_PER_PAGE_BITS) == (b >> LINES_PER_PAGE_BITS);
+}
+
+static ipt_entry *ipt_lookup(uint32_t tag, bool *hit)
+{
+    int way = -1;
+    for (int i = 0; i < IPT_SIZE; i++)
+        if (ipt[i].valid && ipt[i].tag == tag)
+            way = i;
+    *hit = way >= 0;
+    if (!*hit)
+        for (int i = 0; i < IPT_SIZE; i++)
+            if (ipt[i].lru == IPT_SIZE - 1)
+                way = i;
+    for (int i = 0; i < IPT_SIZE; i++)
+        if (ipt[i].lru < ipt[way].lru)
+            ipt[i].lru++;
+    ipt[way].lru = 0;
+    return &ipt[way];
+}
+
+// true if the line was prefetched recently; records it otherwise
+static bool filter_check(uint64_t line)
+{
+    uint32_t tag = (uint32_t)(line ^ (line >> FILTER_TAG_BITS))
+                   & ((1 << FILTER_TAG_BITS) - 1);
+    for (int i = 0; i < FILTER_SIZE; i++)
+        if (filter_valid[i] && filter[i] == tag)
+            return true;
+    filter[filter_head] = tag;
+    filter_valid[filter_head] = true;
+    filter_head = (filter_head + 1) % FILTER_SIZE;
+    return false;
+}
+
+static uint32_t degree_for(uint64_t acc)
+{
+    if (acc < ACC_LO)
+        return DEG_LO;
+    if (acc < ACC_MID)
+        return DEG_MID;
+    if (acc < ACC_HI)
+        return DEG_HI;
+    return DEG_MAX;
+}
+
+void CACHE::l1d_prefetcher_initialize()
+{
+    cout << "CPU " << cpu << " L1D Stride Pattern Prefetcher (SPP)" << endl;
+
+    for (int i = 0; i < IPT_SIZE; i++) {
+        ipt[i].valid = false;
+        ipt[i].lru = i;
+    }
 }
 
 void CACHE::l1d_prefetcher_operate(uint64_t addr, uint64_t ip, uint8_t cache_hit, uint8_t type, uint8_t critical_ip_flag)
 {
-   
+    // accuracy throttling; stats are reset at the end of warmup
+    if (pf_lower_level < snap_lower || pf_useful < snap_useful) {
+        snap_lower = pf_lower_level;
+        snap_useful = pf_useful;
+    }
+    if (pf_lower_level - snap_lower >= THROTTLE_WINDOW) {
+        uint64_t acc = 100 * (pf_useful - snap_useful)
+                       / (pf_lower_level - snap_lower);
+        windows_at[degree]++;
+        degree = degree_for(acc);
+        snap_lower = pf_lower_level;
+        snap_useful = pf_useful;
+    }
+
+    // train on demand accesses only
+    if (type != LOAD && type != RFO)
+        return;
+
+    uint64_t line = addr >> LOG2_BLOCK_SIZE;
+    uint32_t iph = ip_hash(ip);
+    uint32_t tag = iph & ((1 << IPT_TAG_BITS) - 1);
+    uint32_t low = line & ((1 << LINE_BITS) - 1);
+
+    bool hit = false;
+    ipt_entry *e = ipt_lookup(tag, &hit);
+    if (!hit) {
+        e->valid = true;
+        e->tag = tag;
+        e->last_line = low;
+        e->last_stride = 0;
+        e->conf = 0;
+        e->sig = 0;
+        return;
+    }
+
+    // stride from the low line bits, sign-extended
+    int32_t stride = (int16_t)(uint16_t)(low - e->last_line);
+    if (stride == 0)
+        return;
+    e->last_line = low;
+
+    // too far to prefetch within a page: start over
+    if (stride > MAX_STRIDE || stride < -MAX_STRIDE) {
+        e->last_stride = 0;
+        e->conf = 0;
+        e->sig = 0;
+        return;
+    }
+
+    // uniform stride confidence
+    if (stride == e->last_stride) {
+        if (e->conf < CONF_MAX)
+            e->conf++;
+    } else if (e->conf > 0) {
+        e->conf--;
+    }
+    e->last_stride = stride;
+
+    // pattern table: the old history was followed by this stride
+    pt_entry *p = &pt[pt_index(e->sig, iph)];
+    if (p->stride == stride) {
+        if (p->conf < CONF_MAX)
+            p->conf++;
+    } else if (p->conf > 0) {
+        p->conf--;
+    } else {
+        p->stride = stride;
+        p->conf = 1;
+    }
+    e->sig = next_sig(e->sig, stride);
+
+    pt_entry *next = &pt[pt_index(e->sig, iph)];
+    bool nu_ok = next->conf >= NU_CONF;
+    bool uni = e->conf >= UNI_CONF && !(nu_ok && next->stride != stride);
+    if (!uni && !nu_ok)
+        return;
+
+    int fill = MSHR.occupancy < (MSHR.SIZE >> 1) ? FILL_L1 : FILL_L2;
+    uint64_t pf_line = line;
+    uint32_t sig = e->sig;
+    for (uint32_t i = 0; i < degree; i++) {
+        int32_t s = stride;
+        if (!uni) {
+            pt_entry *q = &pt[pt_index(sig, iph)];
+            if (q->conf < NU_CONF)
+                break;
+            s = q->stride;
+            sig = next_sig(sig, s);
+        }
+        pf_line += s;
+        if (!same_page(pf_line, line))
+            break;
+        if (filter_check(pf_line)) {
+            filtered++;
+            continue;
+        }
+        if (!prefetch_line(ip, addr, pf_line << LOG2_BLOCK_SIZE, fill, 0))
+            break;
+        if (uni)
+            uni_pf++;
+        else
+            nu_pf++;
+    }
 }
 
 void CACHE::l1d_prefetcher_cache_fill(uint64_t v_addr, uint64_t addr, uint32_t set, uint32_t way, uint8_t prefetch, uint64_t v_evicted_addr, uint64_t evicted_addr, uint32_t metadata_in)
@@ -20,5 +289,12 @@ void CACHE::l1d_prefetcher_cache_fill(uint64_t v_addr, uint64_t addr, uint32_t s
 
 void CACHE::l1d_prefetcher_final_stats()
 {
-
+    cout << "L1D SPP uniform prefetches: " << uni_pf
+         << " non-uniform prefetches: " << nu_pf
+         << " filtered: " << filtered << " final degree: " << degree
+         << endl;
+    cout << "L1D SPP throttle windows per degree:";
+    for (int d = 1; d <= DEG_MAX; d++)
+        cout << " " << d << ":" << windows_at[d];
+    cout << endl;
 }
