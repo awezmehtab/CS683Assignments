@@ -8,8 +8,9 @@
 //
 // uniform strides are prefetched first; we fall back to the pattern table
 // when it confidently predicts a different stride, or there is no uniform
-// stride. degree is set from the measured accuracy every THROTTLE_WINDOW
-// prefetches that miss the L1D. prefetches never cross the 4 KB page.
+// stride. degree is set from the measured accuracy (our own issued /
+// useful counters) every THROTTLE_WINDOW issued prefetches. prefetches never
+// cross the 4 KB page.
 
 
 #ifndef IPT_SIZE
@@ -41,6 +42,12 @@
 #define FILTER_SIZE 32
 #endif
 #define FILTER_TAG_BITS 16
+
+// accuracy checker: lines we prefetched recently, to see if a demand access
+// uses them later
+#ifndef PFT_SIZE
+#define PFT_SIZE 128
+#endif
 
 // accuracy throttling: degree per accuracy range (percent)
 #ifndef THROTTLE_WINDOW
@@ -94,8 +101,13 @@ static uint32_t filter[FILTER_SIZE];
 static bool filter_valid[FILTER_SIZE];
 static uint32_t filter_head;
 
+static uint32_t pft[PFT_SIZE];
+static bool pft_valid[PFT_SIZE];
+static uint32_t pft_head;
+
 static uint32_t degree = DEG_INIT;
-static uint64_t snap_lower, snap_useful;
+// issued / useful prefetches in the current throttle window
+static uint32_t win_issued, win_useful;
 
 // stats
 static uint64_t uni_pf, nu_pf, filtered;
@@ -149,13 +161,19 @@ static ipt_entry *ipt_lookup(uint32_t tag, bool *hit)
     return &ipt[way];
 }
 
+// FILTER_TAG_BITS-bit tag of a line, for the filter and the accuracy checker
+static uint32_t line_tag(uint64_t line)
+{
+    return (uint32_t)(line ^ (line >> FILTER_TAG_BITS))
+           & ((1 << FILTER_TAG_BITS) - 1);
+}
+
 // true if we prefetched this line recently, else remembers it. without this,
 // a stream sends the same lines again on every access (line + 2*stride now
 // was line + 3*stride last time)
 static bool filter_check(uint64_t line)
 {
-    uint32_t tag = (uint32_t)(line ^ (line >> FILTER_TAG_BITS))
-                   & ((1 << FILTER_TAG_BITS) - 1);
+    uint32_t tag = line_tag(line);
     for (int i = 0; i < FILTER_SIZE; i++)
         if (filter_valid[i] && filter[i] == tag)
             return true;
@@ -166,6 +184,27 @@ static bool filter_check(uint64_t line)
 }
 
 // accuracy (%) of the last window -> prefetch degree, see ACC_* / DEG_*
+// remember a line we just prefetched (FIFO, oldest one falls out)
+static void pft_record(uint64_t line)
+{
+    pft[pft_head] = line_tag(line);
+    pft_valid[pft_head] = true;
+    pft_head = (pft_head + 1) % PFT_SIZE;
+}
+
+// a demand access to a line we prefetched: that prefetch was useful. the
+// entry is dropped so it's counted only once
+static bool pft_hit(uint64_t line)
+{
+    uint32_t tag = line_tag(line);
+    for (int i = 0; i < PFT_SIZE; i++)
+        if (pft_valid[i] && pft[i] == tag) {
+            pft_valid[i] = false;
+            return true;
+        }
+    return false;
+}
+
 static uint32_t degree_for(uint64_t acc)
 {
     if (acc < ACC_LO)
@@ -189,30 +228,25 @@ void CACHE::l1d_prefetcher_initialize()
 
 void CACHE::l1d_prefetcher_operate(uint64_t addr, uint64_t ip, uint8_t cache_hit, uint8_t type, uint8_t critical_ip_flag)
 {
-    // throttling: once THROTTLE_WINDOW more prefetches have gone to the L2C,
-    // check how many of those were useful and pick the degree from that.
-    // useful = demand hit on a line with the cache's prefetch bit set.
-    // champsim resets these counters after warmup, so we reset our
-    // snapshot too when that happens
-    if (pf_lower_level < snap_lower || pf_useful < snap_useful) {
-        snap_lower = pf_lower_level;
-        snap_useful = pf_useful;
-    }
-    if (pf_lower_level - snap_lower >= THROTTLE_WINDOW) {
-        uint64_t acc = 100 * (pf_useful - snap_useful)
-                       / (pf_lower_level - snap_lower);
-        windows_at[degree]++;
-        degree = degree_for(acc);
-        snap_lower = pf_lower_level;
-        snap_useful = pf_useful;
-    }
-
     // only demand loads/stores train. prefetch requests come here too, but
     // training on them would be learning from our own guesses
     if (type != LOAD && type != RFO)
         return;
 
     uint64_t line = addr >> LOG2_BLOCK_SIZE;
+
+    // accuracy checker: a demand access to a line we prefetched -> useful.
+    // once THROTTLE_WINDOW prefetches are issued, accuracy = useful / issued
+    // of that window picks the degree, and both counters start over
+    if (pft_hit(line))
+        win_useful++;
+    if (win_issued >= THROTTLE_WINDOW) {
+        uint64_t acc = 100 * (uint64_t)win_useful / win_issued;
+        windows_at[degree]++;
+        degree = degree_for(acc);
+        win_issued = 0;
+        win_useful = 0;
+    }
     uint32_t iph = ip_hash(ip);
     uint32_t tag = iph & ((1 << IPT_TAG_BITS) - 1);
     uint32_t low = line & ((1 << LINE_BITS) - 1);
@@ -304,6 +338,8 @@ void CACHE::l1d_prefetcher_operate(uint64_t addr, uint64_t ip, uint8_t cache_hit
         }
         if (!prefetch_line(ip, addr, pf_line << LOG2_BLOCK_SIZE, fill, 0))
             break;
+        pft_record(pf_line);
+        win_issued++;
         if (uni)
             uni_pf++;
         else
