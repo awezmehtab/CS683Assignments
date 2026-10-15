@@ -1,0 +1,5 @@
+# GCC 7 build environment, used by scripts/build.sh
+FROM docker.io/library/ubuntu:18.04
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends g++ make \
+    && rm -rf /var/lib/apt/lists/*
