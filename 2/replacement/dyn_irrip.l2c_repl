@@ -7,6 +7,9 @@
 //
 // instruction traffic = (#instr accesses + misses) / (#total accesses + misses)
 // this is sampled, and it's decayed periodically (with period DECAY_PERIOD)
+//
+// PF_AWARE: data prefetches insert at PF_INSERT_RRPV, are not promoted by
+// prefetch hits and are not sampled.
 
 #define maxRRPV 3
 
@@ -29,6 +32,12 @@
 #define PSEL_BITS 10
 #define PSEL_MAX ((1 << PSEL_BITS) - 1)
 #define PSEL_MID (1 << (PSEL_BITS - 1))
+#ifndef PF_AWARE
+#define PF_AWARE 1
+#endif
+#ifndef PF_INSERT_RRPV
+#define PF_INSERT_RRPV maxRRPV
+#endif
 
 // one leader of each kind per group of 32 sets
 #define LEADER_BITS 5
@@ -42,7 +51,7 @@ uint32_t instr_access, instr_miss, total_access, total_miss;
 // high = SRRIP leaders miss more
 uint32_t psel = PSEL_MID;
 
-uint64_t irrip_mode_fills, rrip_mode_fills;
+uint64_t irrip_mode_fills, rrip_mode_fills, pf_fills;
 
 // SRRIP leader: high 5 index bits == low 5 bits
 static bool is_leader(uint32_t set) {
@@ -74,15 +83,21 @@ static bool is_instr(uint32_t type, uint8_t isInstruction) {
     return isInstruction && (type == LOAD || type == PREFETCH);
 }
 
+static bool is_data_pf(uint32_t type, uint8_t isInstruction) {
+    return type == PREFETCH && !isInstruction;
+}
+
 // called on misses only
 static void duel(uint32_t set, uint32_t type, uint8_t isInstruction) {
-    if (type == WRITEBACK) return;
+    if (type == WRITEBACK || (PF_AWARE && is_data_pf(type, isInstruction)))
+        return;
     if (is_leader(set) && psel < PSEL_MAX) psel++;
     else if (is_irrip_leader(set) && psel > 0) psel--;
 }
 
 static void sample(uint32_t type, uint8_t isInstruction, uint8_t hit) {
     if (type == WRITEBACK) return;
+    if (PF_AWARE && is_data_pf(type, isInstruction)) return;
 
     bool instr = is_instr(type, isInstruction);
     total_access++;
@@ -103,7 +118,8 @@ static void sample(uint32_t type, uint8_t isInstruction, uint8_t hit) {
 // initialize replacement state
 void CACHE::l2c_initialize_replacement() {
     cout << "Initialize Dynamic I-RRIP state for L2C (threshold "
-         << DYN_THRESHOLD_PCT << "%, duel " << DUEL << ")" << endl;
+         << DYN_THRESHOLD_PCT << "%, prefetch-aware " << PF_AWARE
+         << ", duel " << DUEL << ")" << endl;
 
     for (int i = 0; i < L2C_SET; i++)
         for (int j = 0; j < L2C_WAY; j++) l2_rrpv[i][j] = maxRRPV;
@@ -149,8 +165,16 @@ void CACHE::l2c_update_replacement_state(uint32_t cpu, uint32_t set,
     if (leader) sample(type, isInstruction, hit);
     if (DUEL && !hit) duel(set, type, isInstruction);
 
+    bool data_pf = PF_AWARE && is_data_pf(type, isInstruction);
+
     if (hit) {
-        l2_rrpv[set][way] = 0;
+        if (!data_pf) l2_rrpv[set][way] = 0;
+        return;
+    }
+
+    if (data_pf) {
+        pf_fills++;
+        l2_rrpv[set][way] = PF_INSERT_RRPV;
         return;
     }
 
@@ -172,5 +196,6 @@ void CACHE::l2c_replacement_final_stats() {
     cout << "L2C DYN_IRRIP follower fills (incl. warmup): " << fills
          << " in I-RRIP mode: " << irrip_mode_fills << " ("
          << (fills ? 100.0 * irrip_mode_fills / fills : 0) << "%)"
-         << " final psel: " << psel << endl;
+         << " prefetch fills: " << pf_fills << " final psel: " << psel
+         << endl;
 }
